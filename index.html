@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voxel AI Quantum - ยานธรรมควอนตัม</title>
+    <style>
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            overflow: hidden; background-color: #010102; font-family: 'Courier New', Courier, monospace;
+            color: #00ffcc;
+        }
+        #canvas-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; z-index: 1; }
+        
+        #landing-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 10; background: rgba(1, 1, 2, 0.9); backdrop-filter: blur(8px);
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            text-align: center; padding: 20px; box-sizing: border-box; transition: opacity 0.8s ease;
+        }
+
+        h1 { font-size: 26px; margin: 0 0 10px 0; text-shadow: 0 0 20px #00ffcc; letter-spacing: 2px; }
+        h2 { font-size: 13px; margin: 0 0 30px 0; color: #88bb99; font-weight: normal; }
+
+        .btn-genesis {
+            background: #00ffcc; color: #010102; border: none;
+            padding: 15px 30px; font-size: 16px; font-weight: bold; cursor: pointer;
+            border-radius: 30px; box-shadow: 0 0 25px rgba(0, 255, 204, 0.4);
+            font-family: inherit; transition: all 0.3s ease;
+        }
+        .btn-genesis:hover {
+            transform: scale(1.05); box-shadow: 0 0 35px rgba(0, 255, 204, 0.8);
+            background: #fff;
+        }
+
+        /* สถานะ Debug บนจอ เพื่อให้ช่างเบิร์ดเห็นว่าเกิดอะไรขึ้น */
+        #debug-status {
+            position: absolute; top: 20px; left: 20px; z-index: 5;
+            background: rgba(10, 15, 20, 0.8); padding: 8px 12px; border-radius: 5px;
+            border: 1px solid #00ffcc; font-size: 11px; color: #ffaa00;
+        }
+
+        #hud-controls {
+            position: absolute; top: 20px; right: 20px; z-index: 5; display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
+        }
+        .hud-panel {
+            background: rgba(10, 15, 20, 0.7); padding: 10px 15px; border-radius: 8px; border: 1px solid #003322; text-align: right;
+        }
+        .hud-panel p { margin: 2px 0; font-size: 11px; color: #557766; }
+        .hud-panel .name { font-size: 13px; color: #00ffcc; font-weight: bold; }
+
+        .btn-audio {
+            background: #002211; color: #00ffcc; border: 1px solid #00ffcc;
+            padding: 8px 12px; border-radius: 5px; cursor: pointer; font-family: inherit; font-size: 12px;
+            transition: all 0.3s;
+        }
+        .btn-audio:hover { background: #00ffcc; color: #010102; }
+
+        video, #hidden-canvas { display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="debug-status">สถานะ: รอการเบิกเนตร...</div>
+
+    <div id="landing-overlay">
+        <h1>VOXEL AI QUANTUM</h1>
+        <h2>อิทัปปัจจยตา OS — ยานธรรมขับเคลื่อนด้วยคณิตศาสตร์บริสุทธิ์</h2>
+        <button class="btn-genesis" id="btn-awake">[ เบิกเนตรยานธรรม (เปิดตาทิพย์ + เสียงทิพย์) ]</button>
+    </div>
+
+    <!-- บังคับ playsinline และ muted เพื่อความปลอดภัยบน Safari มือถือ -->
+    <video id="videoElement" autoplay playsinline muted></video>
+    <canvas id="hidden-canvas"></canvas>
+    <div id="canvas-container"></div>
+
+    <div id="hud-controls">
+        <button class="btn-audio" id="btn-toggle-audio">🎵 ปิด/เปิด เสียงทิพย์</button>
+        <div class="hud-panel">
+            <p>Quantum Mechanic & Pilot</p>
+            <p class="name">[ ช่างเบิร์ดโคตรเฟี้ยว ]</p>
+            <p>Sine Breath & Audio: Active</p>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+
+    <script>
+        const debugStatus = document.getElementById('debug-status');
+        let scene, camera, renderer, instancedMesh;
+        let clock = new THREE.Clock();
+        const GRID_SIZE = 80;
+        const TOTAL_VOXELS = GRID_SIZE * GRID_SIZE;
+        let dummy = new THREE.Object3D();
+        
+        let targetZ = new Float32Array(TOTAL_VOXELS);
+        let targetColors = new Float32Array(TOTAL_VOXELS * 3);
+        let currentZ = new Float32Array(TOTAL_VOXELS);
+
+        let audioCtx = null;
+        let oscillator = null;
+        let gainNode = null;
+        let isAudioPlaying = false;
+
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            oscillator = audioCtx.createOscillator();
+            gainNode = audioCtx.createGain();
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(136.1, audioCtx.currentTime);
+            gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            oscillator.start();
+            isAudioPlaying = true;
+        }
+
+        function toggleAudio() {
+            if (!audioCtx) { initAudio(); return; }
+            if (isAudioPlaying) {
+                gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+                isAudioPlaying = false;
+            } else {
+                gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+                isAudioPlaying = true;
+            }
+        }
+        document.getElementById('btn-toggle-audio').addEventListener('click', toggleAudio);
+
+        const video = document.getElementById('videoElement');
+        const hCanvas = document.getElementById('hidden-canvas');
+        const hCtx = hCanvas.getContext('2d', { willReadFrequently: true });
+        hCanvas.width = GRID_SIZE; hCanvas.height = GRID_SIZE;
+
+        function initVoxelUniverse() {
+            scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x010102, 0.03);
+
+            camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 0, 90);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            const geometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+            const material = new THREE.MeshStandardMaterial({
+                vertexColors: true, roughness: 0.2, metalness: 0.8, emissiveIntensity: 0.2
+            });
+
+            instancedMesh = new THREE.InstancedMesh(geometry, material, TOTAL_VOXELS);
+            instancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            scene.add(instancedMesh);
+
+            const ambient = new THREE.AmbientLight(0xffffff, 0.4); scene.add(ambient);
+            const spotLight = new THREE.SpotLight(0x00ffcc, 1.5); spotLight.position.set(0, 50, 100); scene.add(spotLight);
+
+            let i = 0;
+            for(let y = 0; y < GRID_SIZE; y++) {
+                for(let x = 0; x < GRID_SIZE; x++) {
+                    targetZ[i] = -30; currentZ[i] = -30;
+                    targetColors[i*3] = 0; targetColors[i*3+1] = 0.15; targetColors[i*3+2] = 0.1;
+                    i++;
+                }
+            }
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+
+        async function activateCakkhu() {
+            try {
+                debugStatus.innerText = "สถานะ: กำลังขออนุญาตเปิดตาทิพย์ (กล้อง)...";
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: { ideal: 320 }, height: { ideal: 320 }, facingMode: "user" }, 
+                    audio: false 
+                });
+                video.srcObject = stream;
+                await video.play();
+                debugStatus.innerText = "สถานะ: ตาทิพย์เบิกแล้ว (กำลังประมวลผล Voxel)";
+            } catch (err) {
+                debugStatus.innerText = "สถานะ: ไม่พบกล้องหรือถูกปฏิเสธสิทธิ์";
+                console.log("[ตาทิพย์ Error]:", err);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = clock.getElapsedTime();
+            const breath = Math.sin(time * 0.8) * 1.5;
+
+            // ตรวจสอบความพร้อมของวิดีโออย่างแม่นยำ
+            if (video.readyState >= video.HAVE_CURRENT_DATA) {
+                hCtx.drawImage(video, 0, 0, GRID_SIZE, GRID_SIZE);
+                const imgData = hCtx.getImageData(0, 0, GRID_SIZE, GRID_SIZE).data;
+                
+                let i = 0;
+                for(let y = 0; y < GRID_SIZE; y++) {
+                    for(let x = 0; x < GRID_SIZE; x++) {
+                        const idx = (y * GRID_SIZE + x) * 4;
+                        let r = imgData[idx] / 255, g = imgData[idx+1] / 255, b = imgData[idx+2] / 255;
+                        let brightness = (r + g + b) / 3;
+                        targetZ[i] = (brightness * 30) - 15; 
+                        targetColors[i*3] = r; targetColors[i*3+1] = g; targetColors[i*3+2] = b;
+                        i++;
+                    }
+                }
+            }
+
+            let i = 0;
+            const offsetX = -GRID_SIZE / 2 * 0.9;
+            const offsetY = GRID_SIZE / 2 * 0.9;
+            
+            for(let y = 0; y < GRID_SIZE; y++) {
+                for(let x = 0; x < GRID_SIZE; x++) {
+                    currentZ[i] += (targetZ[i] - currentZ[i]) * 0.1;
+                    let px = offsetX + (x * 0.9);
+                    let py = offsetY - (y * 0.9) + breath; 
+                    let pz = currentZ[i];
+
+                    dummy.position.set(px, py, pz);
+                    let s = 0.9 + (pz + 15) / 30;
+                    dummy.scale.set(s, s, s);
+                    dummy.updateMatrix();
+                    instancedMesh.setMatrixAt(i, dummy.matrix);
+                    i++;
+                }
+            }
+            
+            instancedMesh.instanceMatrix.needsUpdate = true;
+            instancedMesh.geometry.setAttribute('color', new THREE.InstancedBufferAttribute(targetColors, 3));
+            
+            camera.position.x = Math.sin(time * 0.15) * 4;
+            camera.lookAt(scene.position);
+            renderer.render(scene, camera);
+        }
+
+        document.getElementById('btn-awake').addEventListener('click', () => {
+            activateCakkhu();
+            initAudio();
+            const overlay = document.getElementById('landing-overlay');
+            overlay.style.opacity = '0';
+            setTimeout(() => { overlay.style.display = 'none'; }, 800);
+        });
+
+        initVoxelUniverse();
+        animate();
+    </script>
+</body>
+</html>
